@@ -1,9 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Notify.Data;
 using Notify.Models;
@@ -15,10 +10,31 @@ namespace Notify.Controllers
     public class NotificationLogsController : ControllerBase
     {
         private readonly NotifyContext _context;
+        private readonly EmailsController _emailsController;
+        private readonly SMSsController _smssController;
+        private readonly PushNotificationController _pushNotificationController;
 
-        public NotificationLogsController(NotifyContext context)
+        public NotificationLogsController(NotifyContext context, EmailsController emailsController, SMSsController smssController, PushNotificationController pushNotificationController)
         {
             _context = context;
+            _emailsController = emailsController;
+            _smssController = smssController;
+            _pushNotificationController = pushNotificationController;
+        }
+
+
+        private List<Users>GetUsersByCategoryId(int IdCategory)
+        {
+            List<int> userIds = _context.UserCategories
+                .Where(userCat => userCat.idCategory ==  IdCategory)
+                .Select(userCat=> userCat.idUser)
+                .ToList();
+
+            List<Users> users = _context.Users
+                .Where(user => userIds.Contains(user.Id))
+                .ToList();
+
+            return users;
         }
 
         // GET: api/NotificationLogs
@@ -51,7 +67,6 @@ namespace Notify.Controllers
         }
 
         // PUT: api/NotificationLogs/5
-        // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPut("{id}")]
         public async Task<IActionResult> PutNotificationLog(int id, NotificationLog notificationLog)
         {
@@ -82,18 +97,53 @@ namespace Notify.Controllers
         }
 
         // POST: api/NotificationLogs
-        // To protect from overposting attacks, see https://go.microsoft.com/fwlink/?linkid=2123754
         [HttpPost]
-        public async Task<ActionResult<NotificationLog>> PostNotificationLog(NotificationLog notificationLog)
+        public async Task<ActionResult<NotificationLog>> PostNotificationLog(int CategoryId, string message)
         {
-          if (_context.NotificationLog == null)
+          if (CategoryId == 0)
           {
-              return Problem("Entity set 'NotifyContext.NotificationLog'  is null.");
+              return Problem("Category not sent");
           }
-            _context.NotificationLog.Add(notificationLog);
+
+            List<Users> userList = GetUsersByCategoryId(CategoryId);
+
+            NotificationLog notificationLog;
+
+            foreach(Users user in userList)
+            {
+                 notificationLog = new NotificationLog {
+                    userId = user.Id,
+                    categoryId = CategoryId,
+                    message = message,
+                   
+                };
+
+                foreach(var subscription in  user.Subscriptions)
+                {
+                    if (subscription.Equals("Email"))
+                    {
+                        await _emailsController.PostEmailNotifaction(user.Id,user.Email);
+                        notificationLog.notificationType = "Email";
+                    }
+                    else if(subscription.Equals("SMS"))
+                    {
+                        await _smssController.PostSMSNotifaction(user.Id, user.PhoneNumber);
+                        notificationLog.notificationType = "SMS";
+                    }else if(subscription.Equals("Push Notification"))
+                    {
+                        await _pushNotificationController.PostPushNotifaction(user.Id, user.Name);
+                        notificationLog.notificationType = "Push Notification";
+                    }
+
+                    _context.NotificationLog.Add(notificationLog);
+                }
+
+            }
+
+            
             await _context.SaveChangesAsync();
 
-            return CreatedAtAction("GetNotificationLog", new { id = notificationLog.id }, notificationLog);
+            return CreatedAtAction("GetNotificationLog", new { id = notificationLog.Id }, notificationLog);
         }
 
         // DELETE: api/NotificationLogs/5
